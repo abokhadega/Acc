@@ -172,7 +172,7 @@ pr(){const i=S.inv.find(x=>x.id===ST.pr);if(!i)return'<div class="empty">الف�
  tm=i.ts?new Date(i.ts).toTimeString().slice(0,8):'',tot=r2(i.net+i.vat),vl=`ضريبة القيمة المضافة ${rate}٪`,pm={cash:'نقدي',bank:'بنك',cr:'آجل'}[i.m],
  qr=sale?qrSvg(tlv([sd.co,sd.vn,i.ts||(i.d+'T00:00:00Z'),tot.toFixed(2),i.vat.toFixed(2)])):'',
  nm=l=>{const it=S.items.find(x=>x.id===l.i);return esc(it?it.name:(l.d||'صنف محذوف'))},
- btns=`<div class="bar"><button class="btn" onclick="print()">طباعة / PDF</button><button class="btn s" onclick="go('inv')">رجوع</button></div>`;
+ btns=`<div class="bar"><button class="btn" onclick="doPrint()">طباعة / PDF</button><button class="btn s" onclick="openCopy()">نسخة للطباعة</button><button class="btn s" onclick="go('inv')">رجوع</button></div>`;
  if(sale&&i.k!=='std'){
   const rows=ls.map(l=>`<tr><td>${nm(l)}</td><td>${qf(l.q)}</td><td>${f(l.p)}</td><td>${f(l.q*l.p)}</td></tr>`).join('');
   return `${btns}<style>@page{size:80mm auto;margin:2mm}</style><div class="th"><div style="font-size:16px"><b>${esc(sd.co)}</b></div><div>${esc(addr(sd))}</div>${sd.ad?`<div>${esc(sd.ad)}</div>`:''}<div>الرقم الضريبي: ${esc(sd.vn)}</div>${sd.cr?`<div>السجل التجاري: ${esc(sd.cr)}</div>`:''}
@@ -212,7 +212,7 @@ vch(){const vt=ST.vt||'jv',NM={jv:'سند قيد',op:'سند افتتاحي',pay
  return `<h2>${NM[vt]}</h2><div class="card">${form}</div><div class="card wrap">${jtable(all)}</div>`},
 
 jb(){const a=ST.j1||'',b=ST.j2||'',list=[...S.je].filter(e=>(!a||e.d>=a)&&(!b||e.d<=b)).sort((x,y)=>x.d.localeCompare(y.d)||cmp(x.id,y.id));
- return `<h2>دفتر اليومية</h2><div class="row"><div><label>من تاريخ</label><input type="date" value="${a}" onchange="ST.j1=this.value;render()"></div><div><label>إلى تاريخ</label><input type="date" value="${b}" onchange="ST.j2=this.value;render()"></div></div><div class="card wrap" style="margin-top:10px">${jtable(list)}</div><button class="btn s" onclick="print()">طباعة / PDF</button>`},
+ return `<h2>دفتر اليومية</h2><div class="row"><div><label>من تاريخ</label><input type="date" value="${a}" onchange="ST.j1=this.value;render()"></div><div><label>إلى تاريخ</label><input type="date" value="${b}" onchange="ST.j2=this.value;render()"></div></div><div class="card wrap" style="margin-top:10px">${jtable(list)}</div><button class="btn" onclick="doPrint()">طباعة / PDF</button><button class="btn s" onclick="openCopy()">نسخة للطباعة</button>`},
 
 coa(){const m=ST.cm||'asset',sgl=S.sg.filter(g=>g.t===m),ca=ST.ca||{c:'',n:'',s:''};
  const tree=Object.keys(TY).map(t=>{const body=S.sg.filter(g=>g.t===t).map(g=>{const ac=S.acc.filter(a=>a.s===g.id).sort((a,b)=>a.c.localeCompare(b.c));
@@ -272,7 +272,7 @@ rep(){const to=ST.to||'',fr=ST.fr||'',m=tb(to),p=tb(to,fr),t=ST.rt||'tb';
  if(t==='vat'){const o=S.acc.find(a=>a.c==='2100'),i=S.acc.find(a=>a.c==='1300'),O=o?bal(o,p[o.c]):0,I=i?bal(i,p[i.c]):0;
   body=`<table><tr><th colspan="2">إقرار ضريبة القيمة المضافة</th></tr><tr><td>ضريبة المخرجات (المبيعات)</td><td class="n">${f(O)}</td></tr><tr><td>ضريبة المدخلات (المشتريات)</td><td class="n">${f(I)}</td></tr>${tot('صافي الضريبة المستحقة',O-I)}</table>`}
  return `<h2>${RT[t]}</h2><div class="row"><div><label>من تاريخ</label><input type="date" value="${fr}" onchange="ST.fr=this.value;render()"></div><div><label>إلى تاريخ</label><input type="date" value="${to}" onchange="ST.to=this.value;render()"></div></div>
- <div class="card wrap" style="margin-top:10px">${body}</div><button class="btn s" onclick="print()">طباعة / PDF</button>`},
+ <div class="card wrap" style="margin-top:10px">${body}</div><button class="btn" onclick="doPrint()">طباعة / PDF</button><button class="btn s" onclick="openCopy()">نسخة للطباعة</button>`},
 
 more(){
  return `<h2>الإعدادات</h2>
@@ -349,6 +349,14 @@ function obt(){let t=0;S.items.filter(x=>x.t==='stock').forEach(x=>{const v=r2((
 function saveOb(){const d=$('#obd').value||today();S.items.filter(x=>x.t==='stock').forEach(x=>{x.oq=+$('#oq'+x.id).value||0;x.cost=+$('#oc'+x.id).value||0;x.od=d});rebuild();save();render()}
 function cdt(a,q,avg){const d=(+a||0)-q;return `<span class="${d<0?'cr':d>0?'dr':''}">${qf(d)} (${f(d*avg)})</span>`}
 function cdf(id,a,q,avg){ST.cn[id]=a;$('#df'+id).innerHTML=a===''?'':cdt(a,q,avg)}
+function printHtml(auto){const css=(document.querySelector('style')||{}).textContent||'',t=V==='pr'?((S.inv.find(x=>x.id===ST.pr)||{}).no||'فاتورة'):(document.title||'');
+ return `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(t)}</title><style>${css}</style><style>:root{--bg:#fff!important;--card:#fff!important;--ink:#000!important;--mut:#555!important;--line:#ccc!important;--pri:#0f5b4d!important;--dr:#1d4e89!important;--cr:#b3382c!important}body{padding:8px}.bar{display:none!important}</style></head><body><main>${$('#main').innerHTML}</main>${auto?'<script>onload=function(){setTimeout(function(){print()},400)}<\/script>':''}</body></html>`}
+function openCopy(){const url=URL.createObjectURL(new Blob([printHtml(true)],{type:'text/html'}));let w=null;try{w=window.open(url,'_blank')}catch(e){}
+ if(!w){const a=document.createElement('a');a.href=url;a.target='_blank';a.rel='noopener';document.body.appendChild(a);a.click();a.remove()}setTimeout(()=>URL.revokeObjectURL(url),120000)}
+function doPrint(){const mm=q=>typeof matchMedia==='function'&&matchMedia(q).matches,sa=(typeof navigator!=='undefined'&&navigator.standalone===true)||mm('(display-mode: standalone)')||mm('(display-mode: fullscreen)')||mm('(display-mode: minimal-ui)');
+ if(!sa){print();return}
+ const f=document.createElement('iframe');f.style.cssText='position:fixed;width:0;height:0;border:0;right:0;bottom:0';document.body.appendChild(f);
+ f.onload=()=>{try{f.contentWindow.focus();f.contentWindow.print()}catch(e){openCopy()}setTimeout(()=>f.remove(),60000)};f.srcdoc=printHtml(false)}
 function openCo(){const F=(k,l,fl)=>`<div ${fl?`style="flex:${fl}"`:''}><label>${l}</label><input id="co_${k}" value="${esc(S[k])}"></div>`;
  $('#md').innerHTML=`<div class="box"><h3 style="margin-top:0">بيانات المؤسسة (البائع)</h3><div class="row">${F('co','اسم المنشأة (كما في السجل التجاري)',3)}${F('vn','الرقم الضريبي (15 رقم)',2)}</div>
  <div class="row">${F('cr','السجل التجاري')}${F('ad','الهاتف')}</div><div class="row">${F('bn','رقم المبنى')}${F('st','الشارع',2)}${F('dt','الحي')}</div><div class="row">${F('ct','المدينة')}${F('pc','الرمز البريدي')}</div>
