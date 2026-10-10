@@ -81,14 +81,46 @@ const seed=()=>({co:'شركتي',vat:15,seq:1,iseq:1,
  acc:[['1010','الصندوق','asset'],['1020','البنك','asset'],['1100','العملاء','asset'],['1200','المخزون','asset'],['1300','ضريبة مدخلات','asset'],
  ['2010','الموردون','liab'],['2100','ضريبة مخرجات','liab'],['3010','رأس المال','eq'],['4010','المبيعات','rev'],['5010','تكلفة المبيعات','exp'],
  ['5100','الرواتب','exp'],['5200','الإيجار','exp'],['5300','مصروفات عامة','exp']].map(a=>({c:a[0],n:a[1],t:a[2]})),je:[],inv:[]});
-let S;try{S=JSON.parse(localStorage.getItem(KEY))||seed()}catch(e){S=seed()}
-S.items=S.items||[];S.is=S.is||1;S.vn=S.vn||'';S.ad=S.ad||'';S.pt=S.pt||[];S.ps=S.ps||1;['cr','bn','st','dt','ct','pc'].forEach(k=>S[k]=S[k]||'');migrate();
+let S=seed();normalize();
+function normalize(){S.je=S.je||[];S.inv=S.inv||[];S.acc=S.acc||[];S.items=S.items||[];S.is=S.is||1;S.vn=S.vn||'';S.ad=S.ad||'';S.pt=S.pt||[];S.ps=S.ps||1;['cr','bn','st','dt','ct','pc'].forEach(k=>S[k]=S[k]||'');migrate()}
 function migrate(){
  S.sg=S.sg||[[1,'asset','نقدية وبنوك'],[2,'asset','ذمم مدينة'],[3,'asset','مخزون'],[4,'asset','أصول متداولة أخرى'],[5,'asset','أصول ثابتة'],[6,'liab','ذمم دائنة'],[7,'liab','ضرائب مستحقة'],[8,'liab','التزامات أخرى'],[9,'eq','رأس المال والاحتياطيات'],[10,'rev','إيرادات المبيعات'],[11,'rev','إيرادات أخرى'],[12,'exp','تكلفة المبيعات'],[13,'exp','مصروفات تشغيلية']].map(x=>({id:x[0],t:x[1],n:x[2]}));
  S.sgs=S.sgs||14;const M={'1010':1,'1020':1,'1100':2,'1200':3,'1300':4,'2010':6,'2100':7,'3010':9,'4010':10,'5010':12,'5100':13,'5200':13,'5300':13};
  S.acc.forEach(a=>{if(!a.s)a.s=M[a.c]||(S.sg.find(g=>g.t===a.t)||{}).id});
  S.th=S.th||'auto';S.pms=S.pms||'ex';S.pmp=S.pmp||'ex';S.ic=S.ic||[{id:1,n:'عام'}];S.ics=S.ics||2;S.items.forEach(x=>{if(!x.g)x.g=S.ic[0].id})}
-const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('تعذر الحفظ في المتصفح — خُذ نسخة احتياطية')}};
+// ---------- IndexedDB: meta (settings/accounts/items/parties) + je + inv, incremental writes ----------
+let DB=null,SH={meta:'',je:new Map(),inv:new Map()},FT=null,BUSY=false,AGAIN=false,FERR=false;
+function idbOpen(){return new Promise((res,rej)=>{if(typeof indexedDB==='undefined'||!indexedDB)return rej('no idb');let r;try{r=indexedDB.open('acc_db',1)}catch(e){return rej(e)}
+ r.onupgradeneeded=()=>{const d=r.result;if(!d.objectStoreNames.contains('meta'))d.createObjectStore('meta');['je','inv'].forEach(n=>{if(!d.objectStoreNames.contains(n))d.createObjectStore(n,{keyPath:'id'})})};
+ r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error);r.onblocked=()=>rej('blocked')})}
+const rq=r=>new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
+async function idbLoad(){const t=DB.transaction(['meta','je','inv'],'readonly'),[meta,je,inv]=await Promise.all([rq(t.objectStore('meta').get('meta')),rq(t.objectStore('je').getAll()),rq(t.objectStore('inv').getAll())]);return meta?Object.assign({},meta,{je,inv}):null}
+function snapMeta(){const m={};for(const k in S)if(k!=='je'&&k!=='inv')m[k]=S[k];return m}
+function lsSave(){try{localStorage.setItem(KEY,JSON.stringify(S))}catch(e){alert('تعذر الحفظ في المتصفح — خُذ نسخة احتياطية')}}
+function save(){if(!DB){lsSave();return}clearTimeout(FT);FT=setTimeout(flush,200)}
+async function flush(){if(BUSY){AGAIN=true;return}BUSY=true;
+ try{const meta=JSON.stringify(snapMeta()),nj=new Map(),ni=new Map(),pj=[],pi=[],dj=[],di=[];
+  for(const e of S.je){if(e.gen)continue;const j=JSON.stringify(e);nj.set(e.id,j);if(SH.je.get(e.id)!==j)pj.push(e)}
+  for(const e of S.inv){const j=JSON.stringify(e);ni.set(e.id,j);if(SH.inv.get(e.id)!==j)pi.push(e)}
+  SH.je.forEach((_,k)=>{if(!nj.has(k))dj.push(k)});SH.inv.forEach((_,k)=>{if(!ni.has(k))di.push(k)});
+  if(meta!==SH.meta||pj.length||pi.length||dj.length||di.length){
+   const t=DB.transaction(['meta','je','inv'],'readwrite'),done=new Promise((res,rej)=>{t.oncomplete=res;t.onerror=()=>rej(t.error);t.onabort=()=>rej(t.error)});
+   if(meta!==SH.meta)t.objectStore('meta').put(snapMeta(),'meta');
+   const sj=t.objectStore('je'),si=t.objectStore('inv');pj.forEach(e=>sj.put(e));dj.forEach(k=>sj.delete(k));pi.forEach(e=>si.put(e));di.forEach(k=>si.delete(k));
+   await done;SH={meta,je:nj,inv:ni}}
+ }catch(e){if(!FERR){FERR=true;alert('تعذر الحفظ في قاعدة البيانات — خُذ نسخة احتياطية الآن')}}
+ BUSY=false;if(AGAIN){AGAIN=false;flush()}}
+async function boot(){$('#main').innerHTML='<div class="empty">جارٍ تحميل البيانات…</div>';let loaded=null,mig=false;
+ try{DB=await idbOpen();loaded=await idbLoad();
+  if(loaded){SH={meta:'',je:new Map(loaded.je.map(e=>[e.id,JSON.stringify(e)])),inv:new Map(loaded.inv.map(e=>[e.id,JSON.stringify(e)]))};DB.onversionchange=()=>{try{DB.close()}catch(e){}}}
+  else{const raw=localStorage.getItem(KEY);if(raw){try{loaded=JSON.parse(raw);mig=true}catch(e){}}}
+ }catch(e){DB=null}
+ if(!DB){try{loaded=JSON.parse(localStorage.getItem(KEY))||null}catch(e){loaded=null}}
+ S=loaded||seed();normalize();rebuild();
+ if(DB&&(mig||!loaded)){clearTimeout(FT);await flush();if(mig&&!FERR){try{localStorage.setItem(KEY+'_backup',localStorage.getItem(KEY));localStorage.removeItem(KEY)}catch(e){}}}
+ try{if(DB&&navigator.storage&&navigator.storage.persist)navigator.storage.persist()}catch(e){}
+ applyTheme();render()}
+function lim(list,key,asc){const n=ST['n_'+key]||100,t=list.length,sh=asc?list.slice(-n):list.slice(0,n);return{shown:sh,btn:t>n?`<div class="bar"><button class="btn s" onclick="ST['n_${key}']=${n+200};render()">عرض المزيد (${sh.length} من ${t})</button><button class="btn s" onclick="ST['n_${key}']=1e9;render()">عرض الكل</button></div>`:''}}
 const $=s=>document.querySelector(s),esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const f=v=>(+v||0).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
 const today=()=>new Date().toISOString().slice(0,10);
@@ -139,8 +171,8 @@ home(){const m=tb(),g=c=>A(c)?bal(A(c),m[c]):0,sum=t=>S.acc.filter(a=>a.t===t).r
 
 inv(){const t=ST.it||'sale',sl_=isS(t),h=IH,its=S.items,P=getP(h.pid);
  const lr=il.map((l,k)=>`<tr><td style="min-width:150px"><select onchange="il[${k}].i=+this.value;pick(${k})"><option value="">اختر صنف</option>${itemOpts(l.i)}</select></td><td style="width:80px"><input type="number" step="any" inputmode="decimal" value="${l.q}" oninput="il[${k}].q=this.value;ptot()"></td><td style="width:100px"><input type="number" step="0.01" inputmode="decimal" value="${l.p}" oninput="il[${k}].p=this.value;ptot()"></td><td class="n" id="lt${k}">${f(l.q*l.p)}</td><td>${il.length>1?`<button class="btn d" onclick="il.splice(${k},1);render()">×</button>`:''}</td></tr>`).join('');
- const list=[...S.inv].filter(i=>i.t===t).sort((a,b)=>b.id-a.id);
- const rows=list.map(i=>`<tr><td>${i.no}</td><td>${i.d}</td><td>${esc(i.p)}<br><span class="tag">${isS(i.t)?(i.k==='std'?'ضريبية':'ضريبية مبسطة'):INV[i.t]} · ${{cash:'نقدي',bank:'بنك',cr:'آجل'}[i.m]}</span></td><td class="n"><b>${f(i.net+i.vat)}</b></td><td style="white-space:nowrap"><button class="btn s" style="padding:3px 10px;font-size:13px" onclick="ST.pr=${i.id};go('pr')">عرض</button> <button class="btn s" style="padding:3px 10px;font-size:13px" onclick="editInv(${i.id})">تعديل</button> <button class="btn d" onclick="delInv(${i.id})">حذف</button></td></tr>`).join('');
+ const list=[...S.inv].filter(i=>i.t===t).sort((a,b)=>b.id-a.id),LM=lim(list,'inv_'+t);
+ const rows=LM.shown.map(i=>`<tr><td>${i.no}</td><td>${i.d}</td><td>${esc(i.p)}<br><span class="tag">${isS(i.t)?(i.k==='std'?'ضريبية':'ضريبية مبسطة'):INV[i.t]} · ${{cash:'نقدي',bank:'بنك',cr:'آجل'}[i.m]}</span></td><td class="n"><b>${f(i.net+i.vat)}</b></td><td style="white-space:nowrap"><button class="btn s" style="padding:3px 10px;font-size:13px" onclick="ST.pr=${i.id};go('pr')">عرض</button> <button class="btn s" style="padding:3px 10px;font-size:13px" onclick="editInv(${i.id})">تعديل</button> <button class="btn d" onclick="delInv(${i.id})">حذف</button></td></tr>`).join('');
  return `<h2>${INV[t]}</h2><div class="card">${ST.eiv?`<p class="ok">تعديل ${esc((S.inv.find(x=>x.id===ST.eiv)||{}).no||'')}</p>`:''}
  <div class="row"><div><label>التاريخ</label><input type="date" value="${h.d}" oninput="IH.d=this.value"></div><div><label>${sl_?'العميل':'المورد'}</label><select onchange="IH.pid=+this.value;const q=getP(IH.pid);IH.k=q&&q.vn?'std':'simp';render()"><option value="0">${sl_?'عميل نقدي (بدون تعريف)':'مورد غير معرّف'}</option>${S.pt.filter(x=>x.t===(sl_?'c':'s')).map(x=>`<option value="${x.id}" ${x.id===h.pid?'selected':''}>${esc(x.name)}</option>`).join('')}</select></div><div><label>طريقة السداد</label><select onchange="IH.m=this.value">${[['cash','نقدي'],['bank','بنك'],['cr','آجل']].map(x=>`<option value="${x[0]}" ${h.m===x[0]?'selected':''}>${x[1]}</option>`).join('')}</select></div></div>
  ${P?'':`<label>اسم الطرف (اختياري)</label><input value="${esc(h.p)}" oninput="IH.p=this.value">`}
@@ -150,7 +182,7 @@ inv(){const t=ST.it||'sale',sl_=isS(t),h=IH,its=S.items,P=getP(h.pid);
  <div class="bar"><button class="btn s" onclick="il.push({i:'',q:1,p:''});render()">+ صنف</button></div>
  <div class="row"><div><label>خصم (مبلغ)</label><input type="number" step="0.01" inputmode="decimal" value="${h.disc}" oninput="IH.disc=this.value;ptot()"></div><div style="display:flex;align-items:end"><label style="margin:0 0 10px"><input type="checkbox" ${h.v?'checked':''} onchange="IH.v=this.checked;ptot()" style="width:auto"> ضريبة القيمة المضافة (${S.vat}%)</label></div></div>
  <div id="ipv" style="margin:10px 0">${ptxt()}</div><div class="bar"><button class="btn" onclick="addInv('${t}')">${ST.eiv?'حفظ التعديل':'حفظ'}</button>${ST.eiv?'<button class="btn s" onclick="cancelInv()">إلغاء</button>':''}</div></div>
- <div class="card wrap">${list.length?`<table><tr><th>رقم</th><th>التاريخ</th><th>الطرف</th><th class="n">الإجمالي</th><th></th></tr>${rows}</table>`:'<div class="empty">لا توجد مستندات بعد.</div>'}</div>`},
+ <div class="card wrap">${list.length?`<table><tr><th>رقم</th><th>التاريخ</th><th>الطرف</th><th class="n">الإجمالي</th><th></th></tr>${rows}</table>${LM.btn}`:'<div class="empty">لا توجد مستندات بعد.</div>'}</div>`},
 
 items(){const st=calc().st,q=(ST.q||'').trim(),e=S.items.find(x=>x.id===ST.ei)||{},list=S.items.filter(x=>!q||(x.name+x.code).includes(q)),gsel=e.g||ST.ig||S.ic[0].id;let tv=0;
  const row=x=>{const s=st[x.id]||{q:0,avg:0},k=x.t==='stock',v=k?r2(s.q*s.avg):0;tv+=v;return `<tr><td style="padding-inline-start:14px">${esc(x.code)}</td><td>${esc(x.name)}${k?'':' <span class="tag">خدمة</span>'}</td><td>${esc(x.u)}</td><td class="n ${s.q<0?'cr':''}">${k?qf(s.q):'—'}</td><td class="n">${k?f(s.avg):'—'}</td><td class="n">${k?f(v):'—'}</td><td class="n">${f(x.price)}</td><td style="white-space:nowrap"><button class="btn s" style="padding:3px 10px;font-size:13px" onclick="ST.ei=${x.id};render();scrollTo(0,0)">تعديل</button> <button class="btn d" onclick="delItem(${x.id})">حذف</button></td></tr>`};
@@ -209,10 +241,10 @@ vch(){const vt=ST.vt||'jv',NM={jv:'سند قيد',op:'سند افتتاحي',pay
   const tr=jl.map((l,i)=>`<tr><td style="min-width:160px">${sel(l.a).replace('IDX',i)}</td><td><input type="number" step="0.01" inputmode="decimal" value="${l.dr}" oninput="jl[${i}].dr=this.value;if(this.value)jl[${i}].cr='';jt()"></td><td><input type="number" step="0.01" inputmode="decimal" value="${l.cr}" oninput="jl[${i}].cr=this.value;if(this.value)jl[${i}].dr='';jt()"></td></tr>`).join('');
   form=`${head}<div class="wrap"><table style="margin-top:8px"><tr><th>الحساب</th><th>مدين</th><th>دائن</th></tr>${tr}</table></div><div class="bar"><button class="btn s" onclick="jl.push({a:'',dr:'',cr:''});render()">+ سطر</button>${btn(`addJe('${vt}')`)}<span id="jt" style="align-self:center"></span></div>`}
  const all=[...S.je].filter(e=>(e.vt||(e.gen||e.inv?'':'jv'))===vt).sort((a,b)=>b.d.localeCompare(a.d)||cmp(b.id,a.id));
- return `<h2>${NM[vt]}</h2><div class="card">${form}</div><div class="card wrap">${jtable(all)}</div>`},
+ return `<h2>${NM[vt]}</h2><div class="card">${form}</div><div class="card wrap">${jtable(lim(all,'vch_'+vt).shown)}${lim(all,'vch_'+vt).btn}</div>`},
 
 jb(){const a=ST.j1||'',b=ST.j2||'',list=[...S.je].filter(e=>(!a||e.d>=a)&&(!b||e.d<=b)).sort((x,y)=>x.d.localeCompare(y.d)||cmp(x.id,y.id));
- return `<h2>دفتر اليومية</h2><div class="row"><div><label>من تاريخ</label><input type="date" value="${a}" onchange="ST.j1=this.value;render()"></div><div><label>إلى تاريخ</label><input type="date" value="${b}" onchange="ST.j2=this.value;render()"></div></div><div class="card wrap" style="margin-top:10px">${jtable(list)}</div><button class="btn" onclick="doPrint()">طباعة / PDF</button><button class="btn s" onclick="openCopy()">نسخة للطباعة</button>`},
+ return `<h2>دفتر اليومية</h2><div class="row"><div><label>من تاريخ</label><input type="date" value="${a}" onchange="ST.j1=this.value;render()"></div><div><label>إلى تاريخ</label><input type="date" value="${b}" onchange="ST.j2=this.value;render()"></div></div><div class="card wrap" style="margin-top:10px">${jtable(lim(list,'jb',1).shown)}${lim(list,'jb',1).btn}</div><button class="btn" onclick="doPrint()">طباعة / PDF</button><button class="btn s" onclick="openCopy()">نسخة للطباعة</button>`},
 
 coa(){const m=ST.cm||'asset',sgl=S.sg.filter(g=>g.t===m),ca=ST.ca||{c:'',n:'',s:''};
  const tree=Object.keys(TY).map(t=>{const body=S.sg.filter(g=>g.t===t).map(g=>{const ac=S.acc.filter(a=>a.s===g.id).sort((a,b)=>a.c.localeCompare(b.c));
@@ -253,9 +285,9 @@ ipf(){const a=ST.p1||'',b=ST.p2||'',{mv}=calc(),A2={};
  <div class="card wrap" style="margin-top:10px">${rows?`<table><tr><th>المادة</th><th class="n">الكمية المباعة</th><th class="n">المبيعات</th><th class="n">التكلفة</th><th class="n">الربح</th><th class="n">الهامش</th></tr>${rows}<tr class="tot"><td colspan="2">الإجمالي</td><td class="n">${f(R)}</td><td class="n">${f(C)}</td><td class="n">${f(R-C)}</td><td class="n">${R?f((R-C)/R*100):'—'}%</td></tr></table><p class="mut">المبيعات بعد الخصم وصافي المرتجعات وبدون الضريبة.</p>`:'<div class="empty">لا توجد مبيعات في الفترة.</div>'}</div>`},
 
 led(){const c=ST.lc||S.acc[0].c,a=A(c);let run=0;
- const rows=[...S.je].sort((x,y)=>x.d.localeCompare(y.d)||cmp(x.id,y.id)).flatMap(e=>e.l.filter(l=>l.a===c).map(l=>{run+=(+l.dr||0)-(+l.cr||0);const sh=(a.t==='asset'||a.t==='exp')?run:-run;
-  return `<tr><td>${e.d}</td><td>${e.vno||e.id} ${esc(e.n)}</td><td class="n dr">${l.dr?f(l.dr):''}</td><td class="n cr">${l.cr?f(l.cr):''}</td><td class="n"><b>${f(sh)}</b></td></tr>`})).join('');
- return `<h2>دفتر الأستاذ</h2><select onchange="ST.lc=this.value;render()">${opts(0,c)}</select><div class="card wrap" style="margin-top:10px">${rows?`<table><tr><th>التاريخ</th><th>البيان</th><th class="n">مدين</th><th class="n">دائن</th><th class="n">الرصيد</th></tr>${rows}</table>`:'<div class="empty">لا توجد حركات على هذا الحساب.</div>'}</div>`},
+ const RR=[...S.je].sort((x,y)=>x.d.localeCompare(y.d)||cmp(x.id,y.id)).flatMap(e=>e.l.filter(l=>l.a===c).map(l=>{run+=(+l.dr||0)-(+l.cr||0);const sh=(a.t==='asset'||a.t==='exp')?run:-run;
+  return `<tr><td>${e.d}</td><td>${e.vno||e.id} ${esc(e.n)}</td><td class="n dr">${l.dr?f(l.dr):''}</td><td class="n cr">${l.cr?f(l.cr):''}</td><td class="n"><b>${f(sh)}</b></td></tr>`}));const LM=lim(RR,'led',1),rows=LM.shown.join('');
+ return `<h2>دفتر الأستاذ</h2><select onchange="ST.lc=this.value;render()">${opts(0,c)}</select><div class="card wrap" style="margin-top:10px">${rows?`<table><tr><th>التاريخ</th><th>البيان</th><th class="n">مدين</th><th class="n">دائن</th><th class="n">الرصيد</th></tr>${rows}</table>${LM.btn}`:'<div class="empty">لا توجد حركات على هذا الحساب.</div>'}</div>`},
 
 rep(){const to=ST.to||'',fr=ST.fr||'',m=tb(to),p=tb(to,fr),t=ST.rt||'tb';
  const sec=(ty,mm)=>S.acc.filter(a=>a.t===ty).map(a=>[a,bal(a,mm[a.c])]).filter(x=>x[1]);
@@ -279,7 +311,7 @@ more(){
  <div class="card"><div class="row" style="align-items:center"><div style="flex:3"><b>${esc(S.co)}</b><div class="mut">${S.vn?'الرقم الضريبي: '+esc(S.vn):'لم تُسجَّل بيانات المنشأة بعد'}</div></div><button class="btn" style="flex:0 0 auto" onclick="openCo()">بيانات المؤسسة</button></div></div>
  <div class="card"><div class="row" style="align-items:center"><div style="flex:3"><b>ضريبة القيمة المضافة ${S.vat}٪</b><div class="mut">المبيعات ${S.pms==='inc'?'شاملة':'قبل'} الضريبة · المشتريات ${S.pmp==='inc'?'شاملة':'قبل'} الضريبة</div></div><button class="btn" style="flex:0 0 auto" onclick="openTx()">الضريبة والأسعار</button></div></div>
  <div class="card"><b>المظهر</b><div class="bar">${[['l','نهاري'],['d','ليلي'],['auto','تلقائي']].map(x=>`<button class="btn ${S.th===x[0]?'':'s'}" onclick="setTh('${x[0]}')">${x[1]}</button>`).join('')}</div><div class="mut">التلقائي يتبع إعداد الجوال.</div></div>
- <h3>النسخ الاحتياطي</h3><div class="card"><p class="mut">البيانات محفوظة في هذا المتصفح فقط. خذ نسخة احتياطية بانتظام.</p><div class="bar"><button class="btn" onclick="bk()">تصدير نسخة</button><label class="btn s" style="margin:0;cursor:pointer">استيراد<input type="file" accept=".json" hidden onchange="imp(this)"></label><button class="btn d" onclick="rst()">مسح كل البيانات</button></div></div>`}
+ <h3>النسخ الاحتياطي</h3><div class="card"><p class="mut">${DB?'التخزين: قاعدة بيانات IndexedDB (بدون حد الـ5MB)':'التخزين: localStorage (احتياطي — IndexedDB غير متاح)'} · ${S.je.filter(e=>!e.gen).length} سند · ${S.inv.length} فاتورة. البيانات محفوظة في هذا المتصفح فقط، فخُذ نسخة احتياطية بانتظام.</p><div class="bar"><button class="btn" onclick="bk()">تصدير نسخة</button><label class="btn s" style="margin:0;cursor:pointer">استيراد<input type="file" accept=".json" hidden onchange="imp(this)"></label><button class="btn d" onclick="rst()">مسح كل البيانات</button></div></div>`}
 };
 
 function jtable(list){if(!list.length)return'<div class="empty">لا توجد قيود بعد.</div>';
@@ -430,11 +462,13 @@ function addAcc(){const c=$('#cC').value.trim(),n=$('#cN').value.trim(),sg=S.sg.
 function addSg(){const n=$('#sN').value.trim(),t=$('#sM').value;if(!n)return alert('اكتب اسم التصنيف');if(S.sg.some(g=>g.t===t&&g.n===n))return alert('التصنيف موجود');S.sg.push({id:S.sgs++,t,n});ST.cm=t;ST.ca=null;save();render()}
 function delSg(id){S.sg=S.sg.filter(g=>g.id!==id);save();render()}
 function delAcc(c){if(['1010','1020','1100','1200','1300','2010','2100','3010','4010','5010','5300'].includes(c))return alert('حساب أساسي يستخدمه النظام ولا يمكن حذفه');if(S.je.some(e=>e.l.some(l=>l.a===c)))return alert('الحساب عليه حركات ولا يمكن حذفه');if(confirm('حذف الحساب؟')){S.acc=S.acc.filter(a=>a.c!==c);save();render()}}
-function bk(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(S)],{type:'application/json'}));a.download='accounts-'+today()+'.json';a.click()}
-function imp(i){const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.acc||!d.je)throw 0;if(confirm('استبدال البيانات الحالية؟')){S=d;save();render()}}catch(e){alert('ملف غير صالح')}};if(i.files[0])r.readAsText(i.files[0])}
-function rst(){if(confirm('سيتم مسح كل البيانات نهائيا. متأكد؟')){S=seed();save();render()}}
+function bk(){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([JSON.stringify(Object.assign({},S,{je:S.je.filter(e=>!e.gen)}))],{type:'application/json'}));a.download='accounts-'+today()+'.json';a.click()}
+function imp(i){const r=new FileReader();r.onload=()=>{try{const d=JSON.parse(r.result);if(!d.acc||!d.je)throw 0;if(confirm('استبدال البيانات الحالية؟')){S=d;normalize();rebuild();save();render()}}catch(e){alert('ملف غير صالح')}};if(i.files[0])r.readAsText(i.files[0])}
+function rst(){if(confirm('سيتم مسح كل البيانات نهائيا. متأكد؟')){S=seed();normalize();rebuild();save();render()}}
 document.addEventListener('click',e=>{if(ST.dd>=0&&!e.target.closest('#top')){ST.dd=-1;drawNav()}});
-applyTheme();render();
+if(window.addEventListener)addEventListener('pagehide',()=>{if(DB&&FT){clearTimeout(FT);FT=null;flush()}});
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'&&DB&&FT){clearTimeout(FT);FT=null;flush()}});
+var BOOTP=boot();
 </script>
 </body>
 </html>
